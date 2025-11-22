@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  # React Frontend
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - securegen-net
+
+  # Python FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:securepassword@db:5432/securegen
+    depends_on:
+      - db
+    networks:
+      - securegen-net
+
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=securepassword
+      - POSTGRES_DB=securegen
+    networks:
+      - securegen-net
+
+networks:
+  securegen-net:
+    driver: bridge
+
+volumes:
+  postgres_data:

@@ -1,5 +1,4 @@
-
-import { CredentialRecord, GenerateConfig } from '../types';
+import { CredentialRecord, GenerateConfig, User, AuthResponse } from '../types';
 
 /**
  * SENIOR ENGINEER NOTE:
@@ -19,7 +18,19 @@ export const isMockMode = USE_MOCK_BACKEND;
 
 // --- Mock Implementation (LocalStorage) ---
 
-const STORAGE_KEY = 'securegen_records';
+const STORAGE_KEY_RECORDS = 'securegen_records';
+const STORAGE_KEY_USERS = 'securegen_users';
+const STORAGE_KEY_TOKEN = 'securegen_token';
+const STORAGE_KEY_CURRENT_USER = 'securegen_current_user';
+
+// Helper to get Auth Headers
+const getAuthHeaders = () => {
+  const token = localStorage.getItem(STORAGE_KEY_TOKEN);
+  return {
+    'Content-Type': 'application/json',
+    'Authorization': token ? `Bearer ${token}` : '',
+  };
+};
 
 const generateRandomPassword = (config: GenerateConfig): string => {
   const lowercase = 'abcdefghijklmnopqrstuvwxyz';
@@ -79,10 +90,109 @@ const generateUsernameFromPattern = (pattern: string): string => {
 // --- API Methods ---
 
 export const api = {
-  /**
-   * Generate a new credential pair and save it.
-   */
+
+  // --- Auth Methods ---
+
+  login: async (username: string, password: string): Promise<AuthResponse> => {
+    if (USE_MOCK_BACKEND) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      let users = JSON.parse(localStorage.getItem(STORAGE_KEY_USERS) || '[]');
+
+      // SEED DEFAULT ADMIN USER IF MISSING
+      if (!users.find((u: any) => u.username === 'admin')) {
+          const adminUser = { id: 'default-admin-uuid', username: 'admin', password: 'admin' };
+          users.push(adminUser);
+          localStorage.setItem(STORAGE_KEY_USERS, JSON.stringify(users));
+          // Reload users to ensure we have the latest reference
+          users = JSON.parse(localStorage.getItem(STORAGE_KEY_USERS) || '[]');
+      }
+
+      const user = users.find((u: any) => u.username === username && u.password === password);
+      
+      if (user) {
+        const token = `mock_token_${user.id}_${Date.now()}`;
+        const userObj = { id: user.id, username: user.username };
+        localStorage.setItem(STORAGE_KEY_TOKEN, token);
+        localStorage.setItem(STORAGE_KEY_CURRENT_USER, JSON.stringify(userObj));
+        return { access_token: token, token_type: 'bearer', user: userObj };
+      } else {
+        throw new Error('Invalid credentials');
+      }
+    } else {
+      // Real Backend Login
+      const params = new URLSearchParams();
+      params.append('username', username);
+      params.append('password', password);
+
+      const response = await fetch(`${API_BASE_URL}/auth/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params,
+      });
+
+      if (!response.ok) throw new Error('Login failed');
+      const data = await response.json();
+      localStorage.setItem(STORAGE_KEY_TOKEN, data.access_token);
+      
+      // Fetch user details after login
+      const userResponse = await fetch(`${API_BASE_URL}/users/me`, {
+        headers: { 'Authorization': `Bearer ${data.access_token}` }
+      });
+      const userData = await userResponse.json();
+      localStorage.setItem(STORAGE_KEY_CURRENT_USER, JSON.stringify(userData));
+      
+      return { ...data, user: userData };
+    }
+  },
+
+  register: async (username: string, password: string): Promise<AuthResponse> => {
+    if (USE_MOCK_BACKEND) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const users = JSON.parse(localStorage.getItem(STORAGE_KEY_USERS) || '[]');
+      
+      if (users.find((u: any) => u.username === username)) {
+        throw new Error('Username already exists');
+      }
+
+      const newUser = { id: crypto.randomUUID(), username, password }; // In mock, storing plain pwd for simplicity
+      users.push(newUser);
+      localStorage.setItem(STORAGE_KEY_USERS, JSON.stringify(users));
+
+      // Auto login
+      const token = `mock_token_${newUser.id}_${Date.now()}`;
+      const userObj = { id: newUser.id, username: newUser.username };
+      localStorage.setItem(STORAGE_KEY_TOKEN, token);
+      localStorage.setItem(STORAGE_KEY_CURRENT_USER, JSON.stringify(userObj));
+
+      return { access_token: token, token_type: 'bearer', user: userObj };
+    } else {
+      const response = await fetch(`${API_BASE_URL}/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      if (!response.ok) throw new Error('Registration failed');
+      return api.login(username, password);
+    }
+  },
+
+  logout: () => {
+    localStorage.removeItem(STORAGE_KEY_TOKEN);
+    localStorage.removeItem(STORAGE_KEY_CURRENT_USER);
+    window.location.reload();
+  },
+
+  getCurrentUser: (): User | null => {
+    const u = localStorage.getItem(STORAGE_KEY_CURRENT_USER);
+    return u ? JSON.parse(u) : null;
+  },
+
+  // --- Data Methods ---
+
   generateAndSave: async (config: GenerateConfig): Promise<CredentialRecord> => {
+    const currentUser = api.getCurrentUser();
+    if (!currentUser) throw new Error("Unauthorized");
+
     if (USE_MOCK_BACKEND) {
       await new Promise(resolve => setTimeout(resolve, 600)); 
 
@@ -97,6 +207,7 @@ export const api = {
 
       const newRecord: CredentialRecord = {
         id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(),
+        user_id: currentUser.id, // LINK RECORD TO USER
         username,
         password_plain: password,
         password_hash: 'simulated_hash_' + Math.random().toString(36).substring(7),
@@ -105,16 +216,15 @@ export const api = {
         group: config.group,
       };
 
-      const existing = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-      localStorage.setItem(STORAGE_KEY, JSON.stringify([newRecord, ...existing]));
+      const existing = JSON.parse(localStorage.getItem(STORAGE_KEY_RECORDS) || '[]');
+      localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify([newRecord, ...existing]));
 
       return newRecord;
     } else {
-      // Real FastAPI Call
       try {
         const response = await fetch(`${API_BASE_URL}/generate`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getAuthHeaders(),
             body: JSON.stringify(config),
         });
         
@@ -132,17 +242,20 @@ export const api = {
     }
   },
 
-  /**
-   * Get all history records.
-   */
   getHistory: async (): Promise<CredentialRecord[]> => {
+    const currentUser = api.getCurrentUser();
+    if (!currentUser) throw new Error("Unauthorized");
+
     if (USE_MOCK_BACKEND) {
       await new Promise(resolve => setTimeout(resolve, 400));
-      const data = localStorage.getItem(STORAGE_KEY);
-      return data ? JSON.parse(data) : [];
+      const data = JSON.parse(localStorage.getItem(STORAGE_KEY_RECORDS) || '[]');
+      // FILTER BY USER ID
+      return data.filter((r: CredentialRecord) => r.user_id === currentUser.id);
     } else {
       try {
-        const response = await fetch(`${API_BASE_URL}/records`);
+        const response = await fetch(`${API_BASE_URL}/records`, {
+            headers: getAuthHeaders()
+        });
         if (!response.ok) throw new Error("Failed to fetch");
         const data = await response.json();
         return data.data; 
@@ -153,90 +266,83 @@ export const api = {
     }
   },
 
-  /**
-   * Update a record's group or remark.
-   */
   updateRecord: async (id: string, updates: { group?: string; remark?: string }): Promise<void> => {
     if (USE_MOCK_BACKEND) {
       await new Promise(resolve => setTimeout(resolve, 300));
-      const existing = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+      const existing = JSON.parse(localStorage.getItem(STORAGE_KEY_RECORDS) || '[]');
       const updatedRecords = existing.map((r: CredentialRecord) => 
         r.id === id ? { ...r, ...updates } : r
       );
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedRecords));
+      localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(updatedRecords));
     } else {
       await fetch(`${API_BASE_URL}/records/${id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify(updates),
       });
     }
   },
 
-  /**
-   * Batch update records.
-   */
   updateRecords: async (ids: string[], updates: { group?: string }): Promise<void> => {
     if (USE_MOCK_BACKEND) {
       await new Promise(resolve => setTimeout(resolve, 500));
-      const existing = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+      const existing = JSON.parse(localStorage.getItem(STORAGE_KEY_RECORDS) || '[]');
       const updatedRecords = existing.map((r: CredentialRecord) => 
         ids.includes(r.id) ? { ...r, ...updates } : r
       );
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedRecords));
+      localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(updatedRecords));
     } else {
       await fetch(`${API_BASE_URL}/records/batch-update`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ ids, ...updates }),
       });
     }
   },
 
-  /**
-   * Delete a single record by ID.
-   */
   deleteRecord: async (id: string): Promise<void> => {
     if (USE_MOCK_BACKEND) {
       await new Promise(resolve => setTimeout(resolve, 300));
-      const existing = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+      const existing = JSON.parse(localStorage.getItem(STORAGE_KEY_RECORDS) || '[]');
       const updated = existing.filter((r: CredentialRecord) => r.id !== id);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+      localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(updated));
     } else {
       await fetch(`${API_BASE_URL}/records/${id}`, {
         method: 'DELETE',
+        headers: getAuthHeaders(),
       });
     }
   },
 
-  /**
-   * Batch delete records by IDs.
-   */
   deleteRecords: async (ids: string[]): Promise<void> => {
     if (USE_MOCK_BACKEND) {
       await new Promise(resolve => setTimeout(resolve, 500));
-      const existing = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+      const existing = JSON.parse(localStorage.getItem(STORAGE_KEY_RECORDS) || '[]');
       const updated = existing.filter((r: CredentialRecord) => !ids.includes(r.id));
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+      localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(updated));
     } else {
       await fetch(`${API_BASE_URL}/records/batch-delete`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ ids }),
       });
     }
   },
 
-  /**
-   * Clear all history.
-   */
   clearHistory: async (): Promise<void> => {
+    const currentUser = api.getCurrentUser();
+    if (!currentUser) return;
+
     if (USE_MOCK_BACKEND) {
       await new Promise(resolve => setTimeout(resolve, 300));
-      localStorage.removeItem(STORAGE_KEY);
+      const existing = JSON.parse(localStorage.getItem(STORAGE_KEY_RECORDS) || '[]');
+      // KEEP records NOT belonging to current user
+      const kept = existing.filter((r: CredentialRecord) => r.user_id !== currentUser.id);
+      localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(kept));
     } else {
       await fetch(`${API_BASE_URL}/records`, {
         method: 'DELETE',
+        headers: getAuthHeaders(),
       });
     }
   }

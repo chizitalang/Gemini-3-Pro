@@ -1,17 +1,32 @@
-
 import React, { useEffect, useState } from 'react';
 import { PasswordGenerator } from './components/PasswordGenerator';
 import { HistoryTable } from './components/HistoryTable';
+import { AuthPage } from './components/AuthPage';
 import { api, isMockMode } from './services/api';
-import { CredentialRecord } from './types';
-import { LayoutDashboard, Lock, Server, Wifi, WifiOff } from 'lucide-react';
+import { CredentialRecord, User } from './types';
+import { LayoutDashboard, Lock, Server, LogOut, User as UserIcon } from 'lucide-react';
 
 const App: React.FC = () => {
+  const [user, setUser] = useState<User | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authCheckComplete, setAuthCheckComplete] = useState(false);
+
   const [history, setHistory] = useState<CredentialRecord[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [activeTab, setActiveTab] = useState<'generator' | 'history'>('generator');
 
+  useEffect(() => {
+      // Check for existing session
+      const currentUser = api.getCurrentUser();
+      if (currentUser) {
+          setUser(currentUser);
+          setIsAuthenticated(true);
+      }
+      setAuthCheckComplete(true);
+  }, []);
+
   const fetchHistory = async () => {
+    if (!isAuthenticated) return;
     setIsLoadingHistory(true);
     try {
       const records = await api.getHistory();
@@ -20,15 +35,32 @@ const App: React.FC = () => {
       setHistory(sorted);
     } catch (e) {
       console.error("Failed to fetch history", e);
-      // If fetch fails (e.g. backend down), activeTab stays but history is empty
     } finally {
       setIsLoadingHistory(false);
     }
   };
 
   useEffect(() => {
-    fetchHistory();
-  }, []);
+    if (isAuthenticated) {
+        fetchHistory();
+    }
+  }, [isAuthenticated]);
+
+  const handleLoginSuccess = () => {
+      const currentUser = api.getCurrentUser();
+      setUser(currentUser);
+      setIsAuthenticated(true);
+  };
+
+  const handleLogout = () => {
+      api.logout();
+  };
+
+  if (!authCheckComplete) return null; // Or a loading spinner
+
+  if (!isAuthenticated) {
+      return <AuthPage onLoginSuccess={handleLoginSuccess} />;
+  }
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex flex-col">
@@ -42,9 +74,10 @@ const App: React.FC = () => {
               </div>
               <span className="font-bold text-xl text-gray-900 tracking-tight">SecureGen</span>
             </div>
-            <div className="flex items-center space-x-4">
+            
+            <div className="flex items-center gap-4">
                 {/* Tab Switcher */}
-                <div className="flex bg-gray-100 p-1 rounded-lg">
+                <div className="hidden md:flex bg-gray-100 p-1 rounded-lg">
                     <button 
                         onClick={() => setActiveTab('generator')}
                         className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 flex items-center gap-2 ${activeTab === 'generator' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
@@ -58,20 +91,55 @@ const App: React.FC = () => {
                         <Server className="w-4 h-4" /> History
                     </button>
                 </div>
+
+                <div className="h-6 w-px bg-gray-200 hidden md:block"></div>
+
+                {/* User Profile */}
+                <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2 text-sm text-gray-700 font-medium">
+                        <div className="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-700">
+                            <UserIcon className="w-4 h-4" />
+                        </div>
+                        <span className="hidden sm:inline">{user?.username}</span>
+                    </div>
+                    <button 
+                        onClick={handleLogout}
+                        className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                        title="Logout"
+                    >
+                        <LogOut className="w-5 h-5" />
+                    </button>
+                </div>
             </div>
           </div>
+          
+          {/* Mobile Tab Switcher (Visible only on small screens) */}
+          <div className="md:hidden flex bg-gray-100 p-1 rounded-lg mt-2 mb-2">
+                <button 
+                    onClick={() => setActiveTab('generator')}
+                    className={`flex-1 px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 flex items-center justify-center gap-2 ${activeTab === 'generator' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                >
+                    <LayoutDashboard className="w-4 h-4" /> Generator
+                </button>
+                <button 
+                    onClick={() => setActiveTab('history')}
+                    className={`flex-1 px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 flex items-center justify-center gap-2 ${activeTab === 'history' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                >
+                    <Server className="w-4 h-4" /> History
+                </button>
+            </div>
         </div>
       </nav>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 flex-grow">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 flex-grow w-full">
         {activeTab === 'generator' ? (
             <div className="animate-in fade-in duration-500">
                  <div className="mb-8 text-center">
                     <h1 className="text-4xl font-extrabold text-gray-900 mb-4">Create Strong Credentials</h1>
                     <p className="text-lg text-gray-600 max-w-2xl mx-auto">
                         Generate NIST-compliant passwords paired with custom usernames. 
-                        All records are securely logged to your {isMockMode ? 'local' : 'remote'} database.
+                        All records are securely logged to your encrypted vault.
                     </p>
                  </div>
                  <PasswordGenerator onRecordCreated={fetchHistory} />
