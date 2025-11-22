@@ -1,9 +1,10 @@
+
 import React, { useEffect, useState } from 'react';
 import { PasswordGenerator } from './components/PasswordGenerator';
 import { HistoryTable } from './components/HistoryTable';
-import { api } from './services/api';
+import { api, isMockMode } from './services/api';
 import { CredentialRecord } from './types';
-import { LayoutDashboard, Lock, Server } from 'lucide-react';
+import { LayoutDashboard, Lock, Server, Wifi, WifiOff } from 'lucide-react';
 
 const App: React.FC = () => {
   const [history, setHistory] = useState<CredentialRecord[]>([]);
@@ -19,6 +20,7 @@ const App: React.FC = () => {
       setHistory(sorted);
     } catch (e) {
       console.error("Failed to fetch history", e);
+      // If fetch fails (e.g. backend down), activeTab stays but history is empty
     } finally {
       setIsLoadingHistory(false);
     }
@@ -29,7 +31,7 @@ const App: React.FC = () => {
   }, []);
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC]">
+    <div className="min-h-screen bg-[#F8FAFC] flex flex-col">
       {/* Navigation Header */}
       <nav className="bg-white border-b border-gray-200 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -62,14 +64,14 @@ const App: React.FC = () => {
       </nav>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 flex-grow">
         {activeTab === 'generator' ? (
             <div className="animate-in fade-in duration-500">
                  <div className="mb-8 text-center">
                     <h1 className="text-4xl font-extrabold text-gray-900 mb-4">Create Strong Credentials</h1>
                     <p className="text-lg text-gray-600 max-w-2xl mx-auto">
                         Generate NIST-compliant passwords paired with custom usernames. 
-                        All records are securely logged to your PostgreSQL database.
+                        All records are securely logged to your {isMockMode ? 'local' : 'remote'} database.
                     </p>
                  </div>
                  <PasswordGenerator onRecordCreated={fetchHistory} />
@@ -95,10 +97,24 @@ const App: React.FC = () => {
 
       {/* Footer */}
       <footer className="bg-white border-t border-gray-200 mt-auto">
-        <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row justify-between items-center gap-4">
           <p className="text-center text-gray-400 text-sm">
-            &copy; {new Date().getFullYear()} SecureGen. Powered by React, FastAPI & PostgreSQL.
+            &copy; {new Date().getFullYear()} SecureGen.
           </p>
+          
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-full border border-gray-200">
+            {isMockMode ? (
+               <>
+                <div className="w-2 h-2 rounded-full bg-amber-400"></div>
+                <span className="text-xs font-medium text-gray-600">Mock Backend (Demo Mode)</span>
+               </>
+            ) : (
+               <>
+                <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]"></div>
+                <span className="text-xs font-medium text-gray-600">FastAPI Connected</span>
+               </>
+            )}
+          </div>
         </div>
       </footer>
     </div>

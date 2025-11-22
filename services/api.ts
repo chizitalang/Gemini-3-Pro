@@ -4,17 +4,18 @@ import { CredentialRecord, GenerateConfig } from '../types';
 /**
  * SENIOR ENGINEER NOTE:
  * 
- * This service is designed to switch between a "Mock" mode (using localStorage)
- * and a "Real" mode (connecting to your Python FastAPI + PostgreSQL backend).
+ * This service is configured to connect to your Python FastAPI + PostgreSQL backend.
  * 
- * To connect to your real backend:
- * 1. Set USE_MOCK_BACKEND = false
- * 2. Ensure your FastAPI is running on localhost:8000 (or update API_BASE_URL)
- * 3. Ensure CORS is enabled in your FastAPI app.
+ * Setup Requirements for Real Backend:
+ * 1. Ensure PostgreSQL is running.
+ * 2. Ensure FastAPI is running (uvicorn main:app --reload) on http://localhost:8000.
+ * 3. Change USE_MOCK_BACKEND to false below.
  */
 
-const USE_MOCK_BACKEND = true; 
+const USE_MOCK_BACKEND = true; // Set to true to fix "Failed to fetch" errors in preview environment
 const API_BASE_URL = 'http://localhost:8000/api';
+
+export const isMockMode = USE_MOCK_BACKEND;
 
 // --- Mock Implementation (LocalStorage) ---
 
@@ -31,17 +32,21 @@ const generateRandomPassword = (config: GenerateConfig): string => {
   if (config.useNumbers) charset += numbers;
   if (config.useSymbols) charset += symbols;
 
+  if (charset.length === 0) charset = lowercase; // Fallback
+
   let password = '';
+  const array = new Uint32Array(config.length);
+  crypto.getRandomValues(array);
+  
   for (let i = 0; i < config.length; i++) {
-    const randomIndex = Math.floor(Math.random() * charset.length);
-    password += charset[randomIndex];
+    password += charset[array[i] % charset.length];
   }
   return password;
 };
 
 // Pattern Generation Helpers
-const ADJECTIVES = ['Swift', 'Silent', 'Happy', 'Brave', 'Calm', 'Witty', 'Fancy', 'Bold', 'Crimson', 'Neon'];
-const NOUNS = ['Fox', 'Eagle', 'Panda', 'Tiger', 'Lion', 'Hawk', 'Wolf', 'Bear', 'Falcon', 'Badger'];
+const ADJECTIVES = ['Swift', 'Silent', 'Happy', 'Brave', 'Calm', 'Witty', 'Fancy', 'Bold', 'Crimson', 'Neon', 'Blue', 'Red', 'Green'];
+const NOUNS = ['Fox', 'Eagle', 'Panda', 'Tiger', 'Lion', 'Hawk', 'Wolf', 'Bear', 'Falcon', 'Badger', 'Shark', 'Whale', 'Cat'];
 
 const getRandomAdjective = () => ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
 const getRandomNoun = () => NOUNS[Math.floor(Math.random() * NOUNS.length)];
@@ -49,13 +54,24 @@ const getRandomDigit = () => Math.floor(Math.random() * 10).toString();
 const getRandomLetter = () => 'abcdefghijklmnopqrstuvwxyz'[Math.floor(Math.random() * 26)];
 
 const generateUsernameFromPattern = (pattern: string): string => {
-  // Default pattern if empty
   if (!pattern) pattern = '{adjective}{noun}{number}';
 
-  return pattern
-    .replace(/\{adjective\}/g, () => getRandomAdjective())
-    .replace(/\{noun\}/g, () => getRandomNoun())
-    .replace(/\{number\}/g, () => Math.floor(Math.random() * 1000).toString())
+  // Replace placeholders
+  let result = pattern;
+  
+  // Use a loop to handle multiple occurrences of word placeholders
+  while (result.includes('{adjective}')) {
+    result = result.replace('{adjective}', getRandomAdjective());
+  }
+  while (result.includes('{noun}')) {
+    result = result.replace('{noun}', getRandomNoun());
+  }
+  while (result.includes('{number}')) {
+    result = result.replace('{number}', Math.floor(Math.random() * 1000).toString());
+  }
+
+  // Replace character wildcards
+  return result
     .replace(/#/g, () => getRandomDigit())
     .replace(/\?/g, () => getRandomLetter());
 };
@@ -68,21 +84,19 @@ export const api = {
    */
   generateAndSave: async (config: GenerateConfig): Promise<CredentialRecord> => {
     if (USE_MOCK_BACKEND) {
-      await new Promise(resolve => setTimeout(resolve, 600)); // Simulate network latency
+      await new Promise(resolve => setTimeout(resolve, 600)); 
 
       const password = generateRandomPassword(config);
       
-      // Determine username based on type
       let username = '';
       if (config.usernameType === 'manual' && config.username && config.username.trim() !== '') {
         username = config.username;
       } else {
-        // Auto generate using pattern (defaulting to standard if pattern is missing)
         username = generateUsernameFromPattern(config.usernamePattern || '{adjective}{noun}{number}');
       }
 
       const newRecord: CredentialRecord = {
-        id: crypto.randomUUID(),
+        id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(),
         username,
         password_plain: password,
         password_hash: 'simulated_hash_' + Math.random().toString(36).substring(7),
@@ -91,21 +105,30 @@ export const api = {
         group: config.group,
       };
 
-      // Save to local storage mock DB
       const existing = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
       localStorage.setItem(STORAGE_KEY, JSON.stringify([newRecord, ...existing]));
 
       return newRecord;
     } else {
       // Real FastAPI Call
-      // We send the full config, backend should handle usernameType logic
-      const response = await fetch(`${API_BASE_URL}/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config),
-      });
-      const data = await response.json();
-      return data.data; // Assuming backend returns { data: record }
+      try {
+        const response = await fetch(`${API_BASE_URL}/generate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config),
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
+        }
+
+        const data = await response.json();
+        return data.data; 
+      } catch (error) {
+        console.error("API Error:", error);
+        throw error;
+      }
     }
   },
 
@@ -118,9 +141,15 @@ export const api = {
       const data = localStorage.getItem(STORAGE_KEY);
       return data ? JSON.parse(data) : [];
     } else {
-      const response = await fetch(`${API_BASE_URL}/records`);
-      const data = await response.json();
-      return data.data; // Assuming backend returns { data: [...] }
+      try {
+        const response = await fetch(`${API_BASE_URL}/records`);
+        if (!response.ok) throw new Error("Failed to fetch");
+        const data = await response.json();
+        return data.data; 
+      } catch (error) {
+          console.error("Backend connection failed:", error);
+          throw error;
+      }
     }
   },
 
