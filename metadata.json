@@ -1,0 +1,5 @@
+{
+  "name": "SecureGen - Credential Manager",
+  "description": "A secure username and password generator with history tracking. Designed to interface with a FastAPI + PostgreSQL backend.",
+  "requestFramePermissions": []
+}
